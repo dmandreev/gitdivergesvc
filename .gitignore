@@ -1,0 +1,34 @@
+# Rust build artifacts
+/target
+**/*.rs.bk
+*.pdb
+*.exe
+
+# Cargo lock file — NOT ignored because this workspace produces a binary (gitdiverge).
+# Libraries that depend on gitdiverge-lib should pin versions themselves.
+# Cargo.lock
+
+# Coverage reports
+lcov.info
+*.profraw
+default.profraw
+cobertura.xml
+
+# IDE / Editors
+.idea/
+*.iml
+.vscode/
+*.swp
+*~
+
+# OS generated files
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Environment variables
+.env
+.env.local
+webclientsrc/dist
+webclientsrc/node_modules
+repos

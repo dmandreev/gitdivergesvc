@@ -1,0 +1,7 @@
+# List of repositories to analyze
+# Format: [clone-name] <repository-url>
+# If clone-name is omitted, it is derived from the URL.
+
+# Example repositories (commented out):
+# https://github.com/torvalds/linux.git
+# my-fork https://github.com/user/linux.git

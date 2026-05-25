@@ -1,0 +1,52 @@
+# Example GitDiverge daemon configuration file.
+# Copy this file to gitdiverge.toml and adjust the values for your environment.
+
+[auth]
+# Set to false to disable JWT validation entirely.
+enabled = true
+
+# Auth mode is configured in the [auth.mode] table.
+# Use type = "local" for built-in test key, or type = "jwks" for Keycloak / OIDC.
+
+# --- Local mode (development / testing) ---
+[auth.mode]
+type = "local"
+issuer = "test-issuer"
+audience = "account"
+
+# --- JWKS mode (production with Keycloak) ---
+# Replace the [auth.mode] section above with the following:
+# [auth.mode]
+# type = "jwks"
+# url = "http://localhost:8080/realms/myrealm/protocol/openid-connect/certs"
+# issuer = "http://localhost:8080/realms/myrealm"
+# audience = "account"
+
+# Git credentials for cloning / fetching private repositories.
+# Tokens are read from external files and injected via GIT_ASKPASS so that
+# they never appear in URLs or command-line arguments.
+#
+# [[git_credentials]]
+# host = "gitlab.example.com"
+# token_file = "/run/secrets/gitlab_token"
+#
+# [[git_credentials]]
+# host = "github.com"
+# token_file = "/run/secrets/github_token"
+
+# Web-client runtime configuration.
+# These values are served to browsers as /config.js and override any embedded defaults.
+[webclient]
+# Base URL for API calls. Leave empty for same-origin requests.
+api_base = ""
+
+# OIDC authority URL (e.g. Keycloak realm endpoint).
+# Uncomment and set when using external identity provider.
+# oidc_authority = "https://localhost/realms/master"
+
+# OIDC client ID for the React SPA.
+oidc_client_id = "react-spa"
+
+# JIRA server base URL (e.g. `https://jira.example.com`).
+# Leave empty to disable JIRA integration.
+jira_server_addr = ""

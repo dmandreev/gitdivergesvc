@@ -1,0 +1,22 @@
+[workspace]
+members = ["gitdiverge-lib", "gitdiverge"]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.95"
+authors = ["Dmitry Andreev"]
+license = "MIT"
+
+
+[profile.extreme]
+inherits = "release"
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+strip = true
+debug-assertions = false
+overflow-checks = false
+incremental = false

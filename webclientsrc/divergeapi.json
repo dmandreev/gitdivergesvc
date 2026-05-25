@@ -1,0 +1,1236 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "GitDiverge Daemon API",
+    "description": "HTTP API for cloning, fetching and analysing branch divergence across git repositories.\n\n**Authentication**\n\nAll API endpoints except `GET /health` and `GET /auth/test-token` require a valid\nBearer JWT in the `Authorization` header. The token is validated locally using\nthe configured JWKS endpoint or a local test key. No calls to Keycloak are made\nduring request handling.\n\nClick the *Authorize* button in Swagger UI and paste a token. When running in\n`Local` auth mode, retrieve a test token from `GET /auth/test-token`.\n\n\n**Server-Sent Events (SSE)**\n\nAll mutating endpoints (`clone`, `fetch`, `batch/divergence`) return a\nServer-Sent Events stream (`text/event-stream`). While the operation runs the server\nemits `event: progress` messages. The stream ends with either:\n\n- `event: complete` — the final JSON payload for the operation.\n- `event: error` — an error message with optional details.\n\nThe only non-streaming endpoints are `GET /health`, `GET /api/v1/repos`, and `GET /api/v1/repos/{repo_guid}/divergence`.\n\n**Core concepts**\n\n- *Repository index* — Every cloned repository is assigned a stable GUID. The daemon\n  maintains an index file (`repos.json`) that maps URLs to GUIDs.\n  All mutating endpoints update this index automatically.\n\n- *Clone idempotency* — `POST /api/v1/repos/clone` is safe to retry. If the repository\n  already exists locally the endpoint returns `already_exists` without re-cloning.\n\n- *Branch validation* — Fetch and divergence endpoints validate every requested branch\n  against `origin/<branch>`. Non-existent branches are reported in `branch_statuses`\n  with `exists: false` and are skipped during checkout.\n\n- *Divergence analysis* — For every ordered pair of valid branches `(target, source)`,\n  the daemon computes the commits that exist in `source` but are **not** reachable from\n  `target` (judged by commit-hash equality). For `n` valid branches this produces\n  `n*(n-1)` comparisons.\n\n- *Batch pipeline* — `POST /api/v1/batch/divergence` runs a three-phase workflow\n  (clone → fetch/checkout → analytics) in parallel across all requested repositories.\n\n**Concurrency**\n\nThe daemon is safe to use from multiple clients simultaneously. Requests targeting\n*different* repositories run fully in parallel. Requests targeting the *same*\nrepository are automatically serialized so that git operations do not collide:\n\n- `clone` locks by repository URL (preventing duplicate GUIDs for the same URL)\n  and then by GUID, so fetch/divergence requests for that repo wait until cloning\n  finishes.\n- `fetch` and `divergence` lock by repository GUID. Two divergence analyses on\n  the same repo will run sequentially, not concurrently.\n- `batch/divergence` acquires locks for every repository in the batch (in sorted\n  order to avoid deadlocks) before starting work. A batch request and a single-repo\n  request for an overlapping repo will be serialized correctly.\n\nBecause the underlying git working directory is mutated (fetch, checkout, clone),\nthere is no benefit — and significant risk — in running overlapping git commands\non the same repo concurrently. The locking ensures correctness at the expense of\nqueueing identical overlapping requests.\n\n**Error handling**\n\nAll error responses follow the `ApiError` schema. `400 Bad Request` is returned for\ninvalid input or missing repositories; `500 Internal Server Error` is returned for\ngit command failures or unexpected IO errors. The `details` field often contains the\nunderlying git stderr output.",
+    "contact": {
+      "name": "Dmitry Andreev"
+    },
+    "license": {
+      "name": "MIT"
+    },
+    "version": "0.1.0"
+  },
+  "paths": {
+    "/api/v1/batch/divergence": {
+      "post": {
+        "tags": [
+          "crate"
+        ],
+        "summary": "Run batch branch-divergence analysis across multiple repositories.",
+        "description": "Executes the full three-phase pipeline (clone → fetch/checkout → analytics)\nin parallel for every repository in the request body.\n\nThis endpoint returns a Server-Sent Events stream. Progress events are\nemitted while git operations run in a blocking thread pool. The stream ends\nwith either a `complete` event containing the [`Vec<BatchDivergenceResponseItem>`]\nor an `error` event.",
+        "operationId": "batch_divergence",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BatchDivergenceRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "SSE stream of progress events followed by the final result or an error",
+            "content": {
+              "text/event-stream": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized"
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ]
+      }
+    },
+    "/api/v1/repos": {
+      "get": {
+        "tags": [
+          "crate"
+        ],
+        "summary": "List indexed repositories.",
+        "description": "Reads the local repository index (`repos.json`) and returns\nevery tracked repository with its GUID, name, URL, and absolute filesystem path.",
+        "operationId": "list_repos",
+        "responses": {
+          "200": {
+            "description": "List of indexed repositories",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/RepoIndexEntry"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Index could not be read",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ]
+      }
+    },
+    "/api/v1/repos/clone": {
+      "post": {
+        "tags": [
+          "crate"
+        ],
+        "summary": "Clone a remote repository.",
+        "description": "Clones `url` into a GUID-derived directory. The repository is registered in\nthe local index so that subsequent calls can refer to it by GUID. If the\nrepository already exists locally, it is not re-cloned and the response\nstatus is `already_exists`.\n\nThis endpoint returns a Server-Sent Events stream. Progress events are\nemitted while git operations run in a blocking thread pool. The stream ends\nwith either a `complete` event containing the [`CloneResponse`] or an\n`error` event.",
+        "operationId": "clone_repo",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CloneRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "SSE stream of progress events followed by the final result or an error",
+            "content": {
+              "text/event-stream": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized"
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ]
+      }
+    },
+    "/api/v1/repos/{repo_guid}/branches": {
+      "get": {
+        "tags": [
+          "crate"
+        ],
+        "summary": "List branches for an existing repository.",
+        "description": "Looks up the repository by `repo_guid` and returns all remote-tracking\nbranch names (with the `origin/` prefix removed). The gix library provider\nis used for the enumeration.",
+        "operationId": "list_branches",
+        "parameters": [
+          {
+            "name": "repo_guid",
+            "in": "path",
+            "description": "Repository GUID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "List of branch names",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BranchesResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Repository not found or invalid",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Git operation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ]
+      }
+    },
+    "/api/v1/repos/{repo_guid}/divergence": {
+      "get": {
+        "tags": [
+          "crate"
+        ],
+        "summary": "Analyse branch divergence for a single repository.",
+        "description": "Looks up the repository by `repo_guid`, validates the requested branches\nagainst local remote-tracking refs, then computes pairwise commit divergence\nusing the `gix` library provider.\n\nThis endpoint is **read-only** — it does not fetch from the remote or\nmutate the working directory. Call `POST /api/v1/repos/{repo_guid}/fetch`\nfirst if you need fresh remote data.\n\nThis endpoint returns a Server-Sent Events stream. Progress events are\nemitted while git operations run in a blocking thread pool. The stream ends\nwith either a `complete` event containing the [`DivergenceResponse`] or an\n`error` event.",
+        "operationId": "repo_divergence",
+        "parameters": [
+          {
+            "name": "repo_guid",
+            "in": "path",
+            "description": "Repository GUID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "branches",
+            "in": "query",
+            "description": "Comma-separated list of branches to compare.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "SSE stream of progress events followed by the final result or an error",
+            "content": {
+              "text/event-stream": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized"
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ]
+      }
+    },
+    "/api/v1/repos/{repo_guid}/divergence/commits": {
+      "get": {
+        "tags": [
+          "crate"
+        ],
+        "summary": "Retrieve paginated missing commits for a specific branch pair.",
+        "description": "Requires that divergence analysis has already been run for this repository\n(via `GET /api/v1/repos/{repo_guid}/divergence`) so the results are cached.",
+        "operationId": "get_divergence_commits",
+        "parameters": [
+          {
+            "name": "repo_guid",
+            "in": "path",
+            "description": "Repository GUID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "source_branch",
+            "in": "query",
+            "description": "Source branch (the branch that may contain missing commits).",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "target_branch",
+            "in": "query",
+            "description": "Target branch (the branch being compared against).",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "branches",
+            "in": "query",
+            "description": "Comma-separated list of branches that were included in the divergence analysis.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "page",
+            "in": "query",
+            "description": "Zero-based page index.",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "minimum": 0
+            }
+          },
+          {
+            "name": "page_size",
+            "in": "query",
+            "description": "Number of commits per page.",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Paged commits for a branch pair",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PagedCommitsResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid branch pair or page parameters",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No cached divergence found for this repo",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ]
+      }
+    },
+    "/api/v1/repos/{repo_guid}/fetch": {
+      "post": {
+        "tags": [
+          "crate"
+        ],
+        "summary": "Fetch updates for an existing repository.",
+        "description": "Looks up the repository by `repo_guid` in the local index, runs `git fetch`,\nvalidates every branch in the request body against `origin/<branch>`, and\nchecks out the valid branches locally.\n\nThis endpoint returns a Server-Sent Events stream. Progress events are\nemitted while git operations run in a blocking thread pool. The stream ends\nwith either a `complete` event containing the [`FetchResponse`] or an\n`error` event.",
+        "operationId": "fetch_repo",
+        "parameters": [
+          {
+            "name": "repo_guid",
+            "in": "path",
+            "description": "Repository GUID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FetchRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "SSE stream of progress events followed by the final result or an error",
+            "content": {
+              "text/event-stream": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized"
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ]
+      }
+    },
+    "/auth/test-token": {
+      "get": {
+        "tags": [
+          "crate"
+        ],
+        "summary": "Generate a test JWT signed with the embedded local RSA key.",
+        "description": "This endpoint is only available when the service is configured in `Local`\nauth mode. The returned token expires on **2035-01-01** and can be used to\nauthorise requests via the Swagger UI *Authorize* button or via the\n`Authorization: Bearer <token>` header.",
+        "operationId": "test_token",
+        "responses": {
+          "200": {
+            "description": "Test token generated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TestTokenResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not available in current auth mode",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": []
+      }
+    },
+    "/health": {
+      "get": {
+        "tags": [
+          "crate"
+        ],
+        "summary": "Health check.",
+        "description": "Returns a simple `ok` status and the daemon version. Use this endpoint to\nverify that the service is running and reachable before issuing other requests.",
+        "operationId": "health",
+        "responses": {
+          "200": {
+            "description": "Service is healthy",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HealthResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": []
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "ApiError": {
+        "type": "object",
+        "description": "Error response returned by the API when a request cannot be fulfilled.\n\nThe `error` field contains a short human-readable message, while `details`\nmay hold additional context such as the underlying git stderr output.",
+        "required": [
+          "error"
+        ],
+        "properties": {
+          "details": {
+            "type": "string",
+            "description": "Optional additional context (e.g. git stderr, IO path, parse hint).",
+            "nullable": true
+          },
+          "error": {
+            "type": "string",
+            "description": "Short human-readable error message."
+          }
+        }
+      },
+      "Author": {
+        "type": "object",
+        "description": "Information about the author of a commit.",
+        "required": [
+          "name",
+          "email"
+        ],
+        "properties": {
+          "email": {
+            "type": "string",
+            "description": "Author email address (e.g. \"alice@example.com\")."
+          },
+          "name": {
+            "type": "string",
+            "description": "Author display name (e.g. \"Alice Liddell\")."
+          }
+        }
+      },
+      "BatchDivergenceRequest": {
+        "type": "object",
+        "description": "Request body for batch branch-divergence analysis across multiple repositories.\n\nThe daemon runs a three-phase pipeline for every repository:\n1. Clone repositories that are missing locally (or skip if already present).\n2. Fetch updates and validate/checkout the requested branches.\n3. Run pairwise branch-divergence analysis.\n\nResults are returned as an array with one item per requested repository.",
+        "required": [
+          "repos",
+          "branches"
+        ],
+        "properties": {
+          "branches": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Branches to validate, checkout, and analyze in every repository."
+          },
+          "repos": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/BatchRepoRequest"
+            },
+            "description": "List of repositories to process. Each entry must contain a `url`;\nthe repository name is derived automatically from the URL."
+          }
+        }
+      },
+      "BatchDivergenceResponseItem": {
+        "type": "object",
+        "description": "Result item for a single repository in a batch divergence analysis.\n\nIf a repository fails at any phase, `analytics` will be `null` and `error`\nwill contain a description of the failure.",
+        "required": [
+          "repo_name",
+          "repo_guid",
+          "repo_url",
+          "repo_path",
+          "branch_statuses"
+        ],
+        "properties": {
+          "analytics": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/BranchAnalyticsSummary"
+              }
+            ],
+            "nullable": true
+          },
+          "branch_statuses": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/BranchStatus"
+            },
+            "description": "Per-branch existence status after remote validation."
+          },
+          "error": {
+            "type": "string",
+            "description": "Error message when the repository could not be cloned, fetched, or analyzed.",
+            "nullable": true
+          },
+          "repo_guid": {
+            "type": "string",
+            "description": "Stable GUID assigned to the repository in the local index."
+          },
+          "repo_name": {
+            "type": "string",
+            "description": "Human-readable repository name."
+          },
+          "repo_path": {
+            "type": "string",
+            "description": "Absolute filesystem path of the repository."
+          },
+          "repo_url": {
+            "type": "string",
+            "description": "Original remote URL used for cloning."
+          }
+        }
+      },
+      "BatchRepoRequest": {
+        "type": "object",
+        "description": "Single repository entry inside a batch divergence request.",
+        "required": [
+          "url"
+        ],
+        "properties": {
+          "url": {
+            "type": "string",
+            "description": "Git remote URL. Supported formats include HTTPS and SSH."
+          }
+        }
+      },
+      "BranchAnalytics": {
+        "type": "object",
+        "description": "Full analytics report for a set of branches.",
+        "required": [
+          "repo_path",
+          "branches",
+          "comparisons"
+        ],
+        "properties": {
+          "branches": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "List of branch names that were included in the analysis."
+          },
+          "comparisons": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/BranchComparison"
+            },
+            "description": "Pairwise comparisons for every ordered branch pair.\nFor `n` branches there are `n*(n-1)` comparisons."
+          },
+          "repo_path": {
+            "type": "string",
+            "description": "Absolute filesystem path of the analysed repository."
+          }
+        }
+      },
+      "BranchAnalyticsSummary": {
+        "type": "object",
+        "description": "Lightweight analytics report containing only counts for the N×N matrix.",
+        "required": [
+          "repo_path",
+          "branches",
+          "comparisons"
+        ],
+        "properties": {
+          "branches": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "List of branch names that were included in the analysis."
+          },
+          "comparisons": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/BranchComparisonSummary"
+            },
+            "description": "Pairwise comparison summaries for every ordered branch pair."
+          },
+          "repo_path": {
+            "type": "string",
+            "description": "Absolute filesystem path of the analysed repository."
+          }
+        }
+      },
+      "BranchComparison": {
+        "type": "object",
+        "description": "Result of comparing two branches: commits present in `source_branch` but missing\nfrom `target_branch`.",
+        "required": [
+          "source_branch",
+          "target_branch",
+          "missing_commits"
+        ],
+        "properties": {
+          "missing_commits": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Commit"
+            },
+            "description": "Commits that exist in `source_branch` but are not reachable from `target_branch`\n(judged by commit-hash equality)."
+          },
+          "source_branch": {
+            "type": "string",
+            "description": "The branch that may contain commits not present in `target_branch`."
+          },
+          "target_branch": {
+            "type": "string",
+            "description": "The branch against which `source_branch` is compared."
+          }
+        }
+      },
+      "BranchComparisonSummary": {
+        "type": "object",
+        "description": "Lightweight summary of a single branch comparison.",
+        "required": [
+          "source_branch",
+          "target_branch",
+          "missing_commit_count"
+        ],
+        "properties": {
+          "missing_commit_count": {
+            "type": "integer",
+            "description": "Number of commits present in `source_branch` but missing from `target_branch`.",
+            "minimum": 0
+          },
+          "source_branch": {
+            "type": "string",
+            "description": "The branch that may contain commits not present in `target_branch`."
+          },
+          "target_branch": {
+            "type": "string",
+            "description": "The branch against which `source_branch` is compared."
+          }
+        }
+      },
+      "BranchStatus": {
+        "type": "object",
+        "description": "Status of a requested branch after checking the remote.",
+        "required": [
+          "branch",
+          "exists"
+        ],
+        "properties": {
+          "branch": {
+            "type": "string",
+            "description": "Name of the branch that was checked."
+          },
+          "exists": {
+            "type": "boolean",
+            "description": "`true` if `origin/<branch>` exists on the remote, `false` otherwise."
+          }
+        }
+      },
+      "BranchesResponse": {
+        "type": "object",
+        "description": "Response for listing branches in a repository.\n\nReturns the short names of all remote-tracking branches (e.g. `\"main\"`,\n`\"feature-x\"`) after stripping the remote name prefix.",
+        "required": [
+          "branches"
+        ],
+        "properties": {
+          "branches": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "List of branch names."
+          }
+        }
+      },
+      "CloneRequest": {
+        "type": "object",
+        "description": "Request body for cloning a remote repository.\n\nThe daemon stores cloned repositories under a GUID-derived directory.\nIf the repository has already been cloned, the endpoint returns\n`already_exists` without re-cloning unless `force` is set to `true`.",
+        "required": [
+          "url"
+        ],
+        "properties": {
+          "force": {
+            "type": "boolean",
+            "description": "When `true`, remove the existing local repository (if any) and re-clone\nit under the same GUID."
+          },
+          "url": {
+            "type": "string",
+            "description": "Git remote URL. Supported formats include HTTPS (`https://host/owner/repo.git`)\nand SSH (`git@host:owner/repo.git`)."
+          }
+        }
+      },
+      "CloneResponse": {
+        "type": "object",
+        "description": "Result of a clone operation.\n\n`repo_guid` is the stable directory name derived from the repository URL and\nis used in all subsequent API calls targeting this repository.",
+        "required": [
+          "repo_name",
+          "repo_guid",
+          "repo_path",
+          "status",
+          "message"
+        ],
+        "properties": {
+          "message": {
+            "type": "string",
+            "description": "Human-readable description of the outcome."
+          },
+          "repo_guid": {
+            "type": "string",
+            "description": "Stable GUID assigned to this repository in the local index."
+          },
+          "repo_name": {
+            "type": "string",
+            "description": "Human-readable repository name (derived from the URL unless overridden)."
+          },
+          "repo_path": {
+            "type": "string",
+            "description": "Absolute filesystem path where the repository was (or already is) cloned."
+          },
+          "status": {
+            "type": "string",
+            "description": "Operation status: `\"cloned\"`, `\"already_exists\"` or `\"recloned\"`."
+          }
+        }
+      },
+      "Commit": {
+        "type": "object",
+        "description": "A single git commit.",
+        "required": [
+          "hash",
+          "author",
+          "timestamp",
+          "subject",
+          "parents"
+        ],
+        "properties": {
+          "author": {
+            "$ref": "#/components/schemas/Author"
+          },
+          "body": {
+            "type": "string",
+            "description": "Remaining lines of the commit message, if any.",
+            "nullable": true
+          },
+          "hash": {
+            "type": "string",
+            "description": "Full 40-character SHA-1 hash of the commit."
+          },
+          "parents": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Hashes of the commit's parent commits. An empty vector indicates a root commit."
+          },
+          "subject": {
+            "type": "string",
+            "description": "First line of the commit message (the \"subject\")."
+          },
+          "timestamp": {
+            "type": "string",
+            "format": "date-time",
+            "description": "Commit timestamp in UTC."
+          }
+        }
+      },
+      "DivergenceQuery": {
+        "type": "object",
+        "description": "Query parameters for branch-divergence analysis of a single repository.\n\nThe endpoint validates the requested branches against local remote-tracking\nrefs and then computes pairwise commit divergence using the `gix` library\nprovider. No network fetch is performed; call `POST /fetch` first if you\nneed fresh remote data.",
+        "required": [
+          "branches"
+        ],
+        "properties": {
+          "branches": {
+            "type": "string",
+            "description": "Comma-separated list of branches to compare."
+          }
+        }
+      },
+      "DivergenceRequest": {
+        "type": "object",
+        "description": "Request body for branch-divergence analysis of a single repository.\n\nThe endpoint first fetches from `origin`, validates the requested branches,\nchecks out the valid ones, and then compares every ordered branch pair to\ncompute missing commits.",
+        "required": [
+          "branches"
+        ],
+        "properties": {
+          "branches": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Branches to compare. At least one branch must exist on the remote.\nThe analysis generates `n*(n-1)` comparisons for `n` valid branches."
+          }
+        }
+      },
+      "DivergenceResponse": {
+        "type": "object",
+        "description": "Branch-divergence analysis result for a single repository.\n\n`analytics` contains lightweight summaries (counts only) for every branch\npair. Use `GET /api/v1/repos/{repo_guid}/divergence/commits` to retrieve\nthe actual commit lists paginated.",
+        "required": [
+          "repo_name",
+          "repo_guid",
+          "repo_path",
+          "branch_statuses",
+          "analytics"
+        ],
+        "properties": {
+          "analytics": {
+            "$ref": "#/components/schemas/BranchAnalyticsSummary"
+          },
+          "branch_statuses": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/BranchStatus"
+            },
+            "description": "Per-branch existence status after remote validation."
+          },
+          "repo_guid": {
+            "type": "string",
+            "description": "Stable GUID of the repository."
+          },
+          "repo_name": {
+            "type": "string",
+            "description": "Human-readable repository name."
+          },
+          "repo_path": {
+            "type": "string",
+            "description": "Absolute filesystem path of the repository."
+          }
+        }
+      },
+      "FetchRequest": {
+        "type": "object",
+        "description": "Request body for fetching updates in an existing repository.\n\nThe daemon runs `git fetch origin`, validates every branch in `branches`\nagainst the remote, and checks out the valid ones locally.",
+        "required": [
+          "branches"
+        ],
+        "properties": {
+          "branches": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Branches to validate and checkout after fetching.\nNon-existent branches are reported in `branch_statuses` with `exists: false`\nand are skipped during checkout."
+          }
+        }
+      },
+      "FetchResponse": {
+        "type": "object",
+        "description": "Result of a fetch operation.\n\n`branch_statuses` contains one entry per requested branch, indicating whether\nit exists on the remote. At least one valid branch is required for checkout.",
+        "required": [
+          "repo_name",
+          "repo_guid",
+          "repo_path",
+          "status",
+          "branch_statuses",
+          "message"
+        ],
+        "properties": {
+          "branch_statuses": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/BranchStatus"
+            },
+            "description": "Per-branch existence status after checking the remote."
+          },
+          "message": {
+            "type": "string",
+            "description": "Human-readable description of how many branches were checked out."
+          },
+          "repo_guid": {
+            "type": "string",
+            "description": "Stable GUID of the repository."
+          },
+          "repo_name": {
+            "type": "string",
+            "description": "Human-readable repository name."
+          },
+          "repo_path": {
+            "type": "string",
+            "description": "Absolute filesystem path of the repository."
+          },
+          "status": {
+            "type": "string",
+            "description": "Operation status: always `\"fetched\"` on success."
+          }
+        }
+      },
+      "HealthResponse": {
+        "type": "object",
+        "description": "Health-check response.\n\nIndicates whether the daemon is running and able to serve requests.",
+        "required": [
+          "status",
+          "version"
+        ],
+        "properties": {
+          "status": {
+            "type": "string",
+            "description": "Always `\"ok\"` when the service is healthy."
+          },
+          "version": {
+            "type": "string",
+            "description": "Daemon version string (taken from `CARGO_PKG_VERSION`)."
+          }
+        }
+      },
+      "LogOptions": {
+        "type": "object",
+        "description": "Options controlling the behavior of `GitProvider::log`.",
+        "required": [
+          "reverse"
+        ],
+        "properties": {
+          "max_count": {
+            "type": "integer",
+            "description": "Maximum number of commits to return.",
+            "nullable": true,
+            "minimum": 0
+          },
+          "reverse": {
+            "type": "boolean",
+            "description": "Reverse the order of commits (oldest first)."
+          },
+          "since": {
+            "type": "string",
+            "format": "date-time",
+            "description": "Only return commits after this timestamp.",
+            "nullable": true
+          },
+          "skip": {
+            "type": "integer",
+            "description": "Number of commits to skip before starting to return results.",
+            "nullable": true,
+            "minimum": 0
+          },
+          "until": {
+            "type": "string",
+            "format": "date-time",
+            "description": "Only return commits before this timestamp.",
+            "nullable": true
+          }
+        }
+      },
+      "PagedCommitsRequest": {
+        "type": "object",
+        "description": "Query parameters for retrieving paginated commits from a branch comparison.",
+        "required": [
+          "source_branch",
+          "target_branch",
+          "branches",
+          "page",
+          "page_size"
+        ],
+        "properties": {
+          "branches": {
+            "type": "string",
+            "description": "Comma-separated list of branches that were included in the divergence analysis."
+          },
+          "page": {
+            "type": "integer",
+            "description": "Zero-based page index.",
+            "minimum": 0
+          },
+          "page_size": {
+            "type": "integer",
+            "description": "Number of commits per page.",
+            "minimum": 0
+          },
+          "source_branch": {
+            "type": "string",
+            "description": "Source branch (the branch that may contain missing commits)."
+          },
+          "target_branch": {
+            "type": "string",
+            "description": "Target branch (the branch being compared against)."
+          }
+        }
+      },
+      "PagedCommitsResponse": {
+        "type": "object",
+        "description": "Response for a paginated commit query.",
+        "required": [
+          "source_branch",
+          "target_branch",
+          "page",
+          "page_size",
+          "total_commits",
+          "commits"
+        ],
+        "properties": {
+          "commits": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Commit"
+            },
+            "description": "Commits in the requested page."
+          },
+          "page": {
+            "type": "integer",
+            "description": "Current page index.",
+            "minimum": 0
+          },
+          "page_size": {
+            "type": "integer",
+            "description": "Number of commits per page.",
+            "minimum": 0
+          },
+          "source_branch": {
+            "type": "string",
+            "description": "Source branch name."
+          },
+          "target_branch": {
+            "type": "string",
+            "description": "Target branch name."
+          },
+          "total_commits": {
+            "type": "integer",
+            "description": "Total number of missing commits for this branch pair.",
+            "minimum": 0
+          }
+        }
+      },
+      "ProgressEvent": {
+        "oneOf": [
+          {
+            "type": "object",
+            "description": "Operation started.",
+            "required": [
+              "message",
+              "event"
+            ],
+            "properties": {
+              "event": {
+                "type": "string",
+                "enum": [
+                  "start"
+                ]
+              },
+              "message": {
+                "type": "string",
+                "description": "Human-readable description of the current operation."
+              },
+              "total": {
+                "type": "integer",
+                "format": "int64",
+                "description": "Total amount of work, if known upfront.",
+                "nullable": true,
+                "minimum": 0
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Progress advanced by one or more units.",
+            "required": [
+              "current",
+              "message",
+              "event"
+            ],
+            "properties": {
+              "current": {
+                "type": "integer",
+                "format": "int64",
+                "description": "Absolute current position.",
+                "minimum": 0
+              },
+              "event": {
+                "type": "string",
+                "enum": [
+                  "advance"
+                ]
+              },
+              "message": {
+                "type": "string",
+                "description": "Optional message update."
+              },
+              "total": {
+                "type": "integer",
+                "format": "int64",
+                "description": "Total amount of work, if known.",
+                "nullable": true,
+                "minimum": 0
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Operation finished.",
+            "required": [
+              "message",
+              "event"
+            ],
+            "properties": {
+              "event": {
+                "type": "string",
+                "enum": [
+                  "finish"
+                ]
+              },
+              "message": {
+                "type": "string",
+                "description": "Final message."
+              }
+            }
+          }
+        ],
+        "description": "A structured progress event suitable for streaming to web clients.",
+        "discriminator": {
+          "propertyName": "event"
+        }
+      },
+      "RepoIndexEntry": {
+        "type": "object",
+        "description": "Single repository entry in the local index.\n\nThe index maps repository URLs to stable GUIDs and local paths, allowing\nthe daemon to locate repositories without exposing filesystem details to\nthe caller.",
+        "required": [
+          "guid",
+          "name",
+          "url",
+          "repo_path"
+        ],
+        "properties": {
+          "guid": {
+            "type": "string",
+            "description": "Stable GUID (directory name for the repository)."
+          },
+          "name": {
+            "type": "string",
+            "description": "Human-readable repository name."
+          },
+          "repo_path": {
+            "type": "string",
+            "description": "Absolute filesystem path of the cloned repository."
+          },
+          "url": {
+            "type": "string",
+            "description": "Original remote URL."
+          }
+        }
+      },
+      "TestTokenResponse": {
+        "type": "object",
+        "description": "Response payload for the test-token endpoint.",
+        "required": [
+          "access_token",
+          "token_type",
+          "expires_in"
+        ],
+        "properties": {
+          "access_token": {
+            "type": "string"
+          },
+          "expires_in": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "token_type": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "securitySchemes": {
+      "bearer_auth": {
+        "type": "http",
+        "scheme": "bearer",
+        "bearerFormat": "JWT"
+      }
+    }
+  }
+}

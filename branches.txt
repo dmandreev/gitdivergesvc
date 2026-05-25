@@ -1,0 +1,5 @@
+# List of branches to analyze across all repositories
+# Lines starting with # or empty lines are ignored
+
+main
+develop
