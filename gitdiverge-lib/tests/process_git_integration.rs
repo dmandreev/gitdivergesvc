@@ -38,7 +38,13 @@ fn commit(repo: &Path, message: &str, file_name: &str, content: &str) {
 
     let status = Command::new("git")
         .current_dir(repo)
-        .args(["commit", "-m", message])
+        .args([
+            "commit",
+            "-m",
+            message,
+            "--author",
+            "Test User <test@example.com>",
+        ])
         .status()
         .expect("git commit should succeed");
     assert!(status.success());
