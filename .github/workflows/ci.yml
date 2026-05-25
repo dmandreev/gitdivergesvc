@@ -8,6 +8,10 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
+  GIT_AUTHOR_NAME: CI
+  GIT_AUTHOR_EMAIL: ci@example.com
+  GIT_COMMITTER_NAME: CI
+  GIT_COMMITTER_EMAIL: ci@example.com
 
 jobs:
   test:
