@@ -1761,11 +1761,11 @@ pub async fn run(
     // Fast-fail if something is already accepting connections on this port.
     // On Windows bind() to a specific interface can succeed even when 0.0.0.0
     // is already bound, so we actively probe with connect() first.
-    if std::net::TcpStream::connect(&addr).is_ok() {
+    if std::net::TcpStream::connect(addr).is_ok() {
         bail!("port {} on {} is already in use", port, bind_addr);
     }
 
-    let listener = std::net::TcpListener::bind(&addr)
+    let listener = std::net::TcpListener::bind(addr)
         .with_context(|| format!("failed to bind to port {} on {}", port, bind_addr))?;
 
     let auth = AuthState::new(config.auth)?;
