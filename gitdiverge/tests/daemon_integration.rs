@@ -384,6 +384,20 @@ async fn list_branches_returns_branches_for_existing_repo() {
         .unwrap();
     assert!(status.success());
 
+    // Configure git identity so commits work in CI where there is no global config.
+    let status = std::process::Command::new("git")
+        .current_dir(&local)
+        .args(["config", "user.email", "ci@example.com"])
+        .status()
+        .unwrap();
+    assert!(status.success());
+    let status = std::process::Command::new("git")
+        .current_dir(&local)
+        .args(["config", "user.name", "CI User"])
+        .status()
+        .unwrap();
+    assert!(status.success());
+
     std::fs::write(local.join("a.txt"), "a").unwrap();
     let status = std::process::Command::new("git")
         .current_dir(&local)
