@@ -1,9 +1,6 @@
 # GitDiverge
 
 [![CI](https://github.com/dmandreev/gitdivergesvc/actions/workflows/ci.yml/badge.svg)](https://github.com/dmandreev/gitdivergesvc/actions/workflows/ci.yml)
-[![Rust](https://img.shields.io/badge/rust-1.95%2B-blue.svg)](https://www.rust-lang.org)
-[![Git](https://img.shields.io/badge/git-2.30.2%2B-blue.svg)](https://git-scm.com)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 GitDiverge is a **blazing fast git repository branch divergence analysis service**. It clones repositories, checks out branches, and computes **pairwise commit divergence** across branch sets — showing exactly which commits exist in one branch but are missing from another. Results are available through a command-line interface, a REST API with real-time progress streams, and an embedded React web UI.
 
