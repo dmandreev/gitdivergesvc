@@ -1314,11 +1314,7 @@ pub async fn repo_divergence(
             &valid_branches,
             analytics.clone(),
         );
-        divergence_cache.insert_with_branches(
-            repo_guid.clone(),
-            &branches,
-            analytics.clone(),
-        );
+        divergence_cache.insert_with_branches(repo_guid.clone(), &branches, analytics.clone());
 
         let repo_name = {
             let index = RepoIndex::open(&clone_dir)?;

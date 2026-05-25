@@ -421,11 +421,15 @@ mod tests {
 
         // Oldest entry must have been evicted to stay under the limit.
         assert!(
-            cache.get_with_branches("guid1", &["main".to_string()]).is_none(),
+            cache
+                .get_with_branches("guid1", &["main".to_string()])
+                .is_none(),
             "oldest entry should have been evicted"
         );
         assert!(
-            cache.get_with_branches("guid3", &["main".to_string()]).is_some(),
+            cache
+                .get_with_branches("guid3", &["main".to_string()])
+                .is_some(),
             "newest entry should still be present"
         );
         assert!(
@@ -441,10 +445,18 @@ mod tests {
         let analytics = make_test_analytics();
         let size_one = estimated_size(&analytics);
 
-        cache.insert_with_branches("guid1".to_string(), &["main".to_string()], analytics.clone());
+        cache.insert_with_branches(
+            "guid1".to_string(),
+            &["main".to_string()],
+            analytics.clone(),
+        );
         assert_eq!(cache.total_size(), size_one);
 
-        cache.insert_with_branches("guid2".to_string(), &["main".to_string()], analytics.clone());
+        cache.insert_with_branches(
+            "guid2".to_string(),
+            &["main".to_string()],
+            analytics.clone(),
+        );
         assert_eq!(cache.total_size(), size_one * 2);
 
         cache.invalidate_repo("guid1");

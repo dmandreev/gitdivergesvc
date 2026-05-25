@@ -148,7 +148,10 @@ pub fn run_clone_phase(
         .build()
         .expect("failed to build clone thread pool");
 
-    progress.start(Some(repos.len() as u64 * 2), "phase 1/3: cloning repositories");
+    progress.start(
+        Some(repos.len() as u64 * 2),
+        "phase 1/3: cloning repositories",
+    );
 
     let results: Vec<ClonePhaseResult> = pool.install(|| {
         resolved
