@@ -140,6 +140,18 @@ impl RepoIndex {
         self.entries.values()
     }
 
+    /// Remove an entry by GUID.
+    ///
+    /// Returns the removed entry if it existed, or `None` if no entry with the
+    /// given GUID was found. The index is **not** automatically persisted;
+    /// callers must call [`save`](Self::save) afterwards.
+    pub fn remove_by_guid(&mut self, guid: &str) -> Option<RepoEntry> {
+        let key = self.entries.iter()
+            .find(|(_, e)| e.guid == guid)
+            .map(|(k, _)| k.clone())?;
+        self.entries.remove(&key)
+    }
+
     /// Scan the clone directory for repositories that are not in the index,
     /// or verify existing ones.
     ///
@@ -543,6 +555,28 @@ mod tests {
     fn repo_name_from_url_empty_after_slash() {
         // Trailing slash leads to empty rsplit component (line 282).
         assert_eq!(repo_name_from_url("https://github.com/user/repo/"), "repo");
+    }
+
+    #[test]
+    fn remove_by_guid_deletes_entry() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut index = RepoIndex::open(tmp.path()).unwrap();
+        let entry = index.get_or_insert("https://a.com/r1".to_string(), "r1".to_string());
+        let guid = entry.guid.clone();
+
+        assert!(index.resolve_by_guid(&guid).is_some());
+        let removed = index.remove_by_guid(&guid);
+        assert!(removed.is_some());
+        assert_eq!(removed.unwrap().guid, guid);
+        assert!(index.resolve_by_guid(&guid).is_none());
+        assert_eq!(index.entries().count(), 0);
+    }
+
+    #[test]
+    fn remove_by_guid_returns_none_for_missing_guid() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut index = RepoIndex::open(tmp.path()).unwrap();
+        assert!(index.remove_by_guid("no-such-guid").is_none());
     }
 
     #[test]

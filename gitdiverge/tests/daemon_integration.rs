@@ -62,6 +62,11 @@ async fn openapi_json_endpoint_returns_ok() {
     assert!(json
         .get("paths")
         .unwrap()
+        .get("/api/v1/repos/{repo_guid}")
+        .is_some());
+    assert!(json
+        .get("paths")
+        .unwrap()
         .get("/api/v1/repos/{repo_guid}/branches")
         .is_some());
     assert!(json
@@ -168,6 +173,102 @@ async fn protected_endpoint_returns_401_without_token_when_auth_enabled() {
         .unwrap();
 
     assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn delete_repo_returns_401_without_token_when_auth_enabled() {
+    let app = build_router(app_state_with_auth());
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("DELETE")
+                .uri("/api/v1/repos/some-guid")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn delete_repo_returns_400_when_repo_not_in_index() {
+    let app = build_router(app_state());
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("DELETE")
+                .uri("/api/v1/repos/nonexistent-guid")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn delete_repo_removes_repo_from_disk_and_index() {
+    let tmp = tempfile::tempdir().unwrap();
+    let clone_dir = tmp.path().join("repos");
+    std::fs::create_dir(&clone_dir).unwrap();
+    let gitdiverge_dir = clone_dir.join(".gitdiverge");
+    std::fs::create_dir(&gitdiverge_dir).unwrap();
+
+    // Create a bare repo and clone it into the expected path.
+    let remote = clone_dir.join("remote.git");
+    let status = std::process::Command::new("git")
+        .args(["init", "--bare", remote.to_str().unwrap()])
+        .status()
+        .unwrap();
+    assert!(status.success());
+
+    let repo_path = clone_dir.join("abc123").join("repo");
+    let status = std::process::Command::new("git")
+        .args(["clone", remote.to_str().unwrap(), repo_path.to_str().unwrap()])
+        .status()
+        .unwrap();
+    assert!(status.success());
+
+    std::fs::write(
+        gitdiverge_dir.join("index.json"),
+        r#"{"https://example.com/repo.git":{"guid":"abc123","name":"repo","url":"https://example.com/repo.git","cloned_at":"2024-01-01T00:00:00Z"}}"#,
+    )
+    .unwrap();
+
+    let mut state = app_state();
+    state.clone_dir = clone_dir.clone();
+    let app = build_router(state);
+
+    // Verify the repo exists before deletion.
+    assert!(repo_path.join(".git").is_dir());
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("DELETE")
+                .uri("/api/v1/repos/abc123")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = hyper::body::to_bytes(response.into_body()).await.unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["repo_guid"], "abc123");
+    assert_eq!(json["status"], "deleted");
+
+    // On-disk directory should be gone.
+    assert!(!repo_path.exists());
+
+    // Index entry should be gone.
+    let index_content = std::fs::read_to_string(gitdiverge_dir.join("index.json")).unwrap();
+    let index: serde_json::Value = serde_json::from_str(&index_content).unwrap();
+    assert!(index.as_object().unwrap().is_empty());
 }
 
 #[tokio::test]

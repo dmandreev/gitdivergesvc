@@ -5,7 +5,7 @@ use axum::{
     extract::{ConnectInfo, Path, Query, State},
     middleware::{self, Next},
     response::{IntoResponse, Response},
-    routing::{get, post},
+    routing::{delete, get, post},
     Json, Router,
 };
 use gitdiverge_lib::{
@@ -352,6 +352,20 @@ pub struct BranchesResponse {
     pub branches: Vec<String>,
 }
 
+/// Response for deleting a repository.
+///
+/// Confirms that the repository entry has been removed from the index and
+/// (if present) its local clone directory deleted.
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct DeleteRepoResponse {
+    /// The GUID of the deleted repository.
+    pub repo_guid: String,
+    /// Status of the deletion operation.
+    pub status: String,
+    /// Human-readable message describing the result.
+    pub message: String,
+}
+
 // ---------------------------------------------------------------------------
 // SSE stream event types
 // ---------------------------------------------------------------------------
@@ -409,6 +423,7 @@ impl Modify for SecurityAddon {
         health,
         test_token,
         list_repos,
+        delete_repo,
         list_branches,
         clone_repo,
         fetch_repo,
@@ -431,6 +446,7 @@ impl Modify for SecurityAddon {
         RepoIndexEntry,
         BranchesResponse,
         TestTokenResponse,
+        DeleteRepoResponse,
         PagedCommitsRequest,
         PagedCommitsResponse,
         BranchComparisonSummary,
@@ -840,6 +856,96 @@ pub async fn list_repos(State(state): State<AppState>) -> ApiResult<Vec<RepoInde
         .collect();
 
     Ok(Json(entries))
+}
+
+/// Delete a repository from the local index and remove its on-disk clone.
+///
+/// Looks up the repository by `repo_guid`, acquires the per-repo lock to
+/// prevent races with concurrent fetch or divergence operations, removes the
+/// local clone directory (if it exists), drops the entry from the index, and
+/// invalidates any cached divergence data for the repository.
+#[utoipa::path(
+    delete,
+    path = "/api/v1/repos/{repo_guid}",
+    operation_id = "delete_repo",
+    security(("bearer_auth" = [])),
+    params(
+        ("repo_guid" = String, Path, description = "Repository GUID")
+    ),
+    responses(
+        (status = 200, description = "Repository deleted successfully", body = DeleteRepoResponse),
+        (status = 400, description = "Repository not found or invalid", body = ApiError),
+        (status = 401, description = "Unauthorized", body = ApiError),
+        (status = 500, description = "Failed to remove repository files or update index", body = ApiError),
+    )
+)]
+#[instrument(skip(state))]
+pub async fn delete_repo(
+    State(state): State<AppState>,
+    Path(repo_guid): Path<String>,
+) -> ApiResult<DeleteRepoResponse> {
+    let clone_dir = state.clone_dir;
+    let repo_locks = state.repo_locks.clone();
+    let divergence_cache = state.divergence_cache.clone();
+
+    info!(%repo_guid, "delete request received");
+
+    // Acquire the per-repo lock so we don't race with fetch/divergence.
+    let lock = repo_locks.acquire(repo_guid.clone());
+    let _guard = lock.lock().unwrap();
+
+    let mut index = match RepoIndex::open(&clone_dir) {
+        Ok(i) => i,
+        Err(e) => return Err(map_err(e)),
+    };
+
+    let entry = match index.resolve_by_guid(&repo_guid) {
+        Some(e) => e.clone(),
+        None => {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                Json(ApiError {
+                    error: format!("repository with guid {} not found in index", repo_guid),
+                    details: None,
+                }),
+            ));
+        }
+    };
+
+    let repo_path = index.entry_path(&entry);
+
+    // Remove the on-disk directory if it exists.
+    if repo_path.exists() {
+        if let Err(e) = std::fs::remove_dir_all(&repo_path) {
+            return Err((
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ApiError {
+                    error: format!("failed to remove repository directory: {}", e),
+                    details: Some(repo_path.to_string_lossy().to_string()),
+                }),
+            ));
+        }
+    }
+
+    // Also remove the parent GUID directory if it is now empty.
+    if let Some(parent) = repo_path.parent() {
+        if parent.exists() {
+            let _ = std::fs::remove_dir(parent);
+        }
+    }
+
+    index.remove_by_guid(&repo_guid);
+    if let Err(e) = index.save() {
+        return Err(map_err(e));
+    }
+
+    divergence_cache.invalidate_repo(&repo_guid);
+
+    Ok(Json(DeleteRepoResponse {
+        repo_guid: repo_guid.clone(),
+        status: "deleted".to_string(),
+        message: format!("repository {} removed successfully", entry.name),
+    }))
 }
 
 /// List branches for an existing repository.
@@ -1715,6 +1821,7 @@ pub fn build_router(state: AppState) -> Router {
     // Protected routes — require a valid Bearer JWT.
     let protected = Router::new()
         .route("/api/v1/repos", get(list_repos))
+        .route("/api/v1/repos/:repo_guid", delete(delete_repo))
         .route("/api/v1/repos/:repo_guid/branches", get(list_branches))
         .route("/api/v1/repos/clone", post(clone_repo))
         .route("/api/v1/repos/:repo_guid/fetch", post(fetch_repo))
@@ -1945,6 +2052,7 @@ mod tests {
         assert!(paths.contains_key("/health"));
         assert!(paths.contains_key("/auth/test-token"));
         assert!(paths.contains_key("/api/v1/repos"));
+        assert!(paths.contains_key("/api/v1/repos/{repo_guid}"));
         assert!(paths.contains_key("/api/v1/repos/{repo_guid}/branches"));
         assert!(paths.contains_key("/api/v1/repos/clone"));
         assert!(paths.contains_key("/api/v1/repos/{repo_guid}/fetch"));
@@ -1971,6 +2079,7 @@ mod tests {
         assert!(schemas.contains_key("RepoIndexEntry"));
         assert!(schemas.contains_key("BranchesResponse"));
         assert!(schemas.contains_key("TestTokenResponse"));
+        assert!(schemas.contains_key("DeleteRepoResponse"));
         assert!(schemas.contains_key("ProgressEvent"));
         assert!(schemas.contains_key("PagedCommitsRequest"));
         assert!(schemas.contains_key("PagedCommitsResponse"));
