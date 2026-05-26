@@ -1,3 +1,4 @@
+import { useId } from 'react'
 import { CheckCircle2, GitBranch, Download, BarChart3 } from 'lucide-react'
 import type { ProgressEventPayload } from '../api/client'
 
@@ -44,6 +45,8 @@ function percent(progress: ProgressEventPayload): number {
 }
 
 export function BulkProgressPanel({ progress, phase, phaseComplete, activeRepo }: BulkProgressPanelProps) {
+  const baseId = useId()
+
   return (
     <div className="space-y-3">
       {PHASES.map((p, idx) => {
@@ -52,13 +55,14 @@ export function BulkProgressPanel({ progress, phase, phaseComplete, activeRepo }
         const Icon = p.icon
         const count = isActive && progress ? formatCount(progress) : undefined
         const pct = isActive && progress ? percent(progress) : status === 'complete' ? 100 : 0
+        const ringId = `${baseId}-ring-${idx}`
 
         return (
           <div
             key={p.label}
             className={`flex items-center gap-4 p-3 rounded-xl border transition-colors ${
               isActive
-                ? 'bg-accent/5 border-accent/20'
+                ? 'bg-accent/5 border-accent/20 animate-[pulse-glow_3s_ease-in-out_infinite]'
                 : status === 'complete'
                   ? 'bg-green/5 border-green/20'
                   : 'bg-surface-1 border-surface-3'
@@ -71,13 +75,37 @@ export function BulkProgressPanel({ progress, phase, phaseComplete, activeRepo }
                   <CheckCircle2 className="w-5 h-5 text-green" />
                 </div>
               ) : (
-                <div
-                  className={`w-10 h-10 rounded-full flex items-center justify-center ${
-                    isActive ? 'bg-accent/20' : 'bg-surface-2'
-                  }`}
-                >
+                <div className="relative w-10 h-10 flex items-center justify-center">
+                  {isActive && (
+                    <>
+                      <svg
+                        className="absolute inset-0 w-full h-full animate-[spin-ring_1.5s_linear_infinite]"
+                        viewBox="0 0 40 40"
+                        aria-hidden="true"
+                      >
+                        <defs>
+                          <linearGradient id={ringId} x1="0%" y1="0%" x2="100%" y2="0%">
+                            <stop offset="0%" stopColor="transparent" />
+                            <stop offset="50%" stopColor="#a78bfa" />
+                            <stop offset="100%" stopColor="#8b5cf6" />
+                          </linearGradient>
+                        </defs>
+                        <circle
+                          cx="20"
+                          cy="20"
+                          r="18"
+                          fill="none"
+                          stroke={`url(#${ringId})`}
+                          strokeWidth="2.5"
+                          strokeLinecap="round"
+                          strokeDasharray="60 120"
+                        />
+                      </svg>
+                      <div className="absolute inset-[3px] rounded-full bg-accent/20" />
+                    </>
+                  )}
                   <Icon
-                    className={`w-5 h-5 ${
+                    className={`w-5 h-5 relative z-10 ${
                       isActive ? 'text-accent-light' : 'text-text-dim'
                     }`}
                   />
@@ -122,7 +150,7 @@ export function BulkProgressPanel({ progress, phase, phaseComplete, activeRepo }
                     status === 'complete'
                       ? 'bg-green'
                       : isActive
-                        ? 'bg-gradient-to-r from-accent to-accent-light'
+                        ? 'bg-gradient-to-r from-accent via-accent-light to-accent bg-[length:200%_100%] animate-[shimmer-bar_2s_infinite_linear]'
                         : 'bg-transparent'
                   }`}
                   style={{ width: `${Math.max(2, pct)}%` }}
