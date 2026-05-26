@@ -15,13 +15,25 @@ const mockRepos = [
 ]
 
 function mockFetchResponse(data: unknown) {
-  globalThis.fetch = vi.fn().mockResolvedValue({
-    ok: true,
-    status: 200,
-    headers: new Headers({ 'content-type': 'application/json' }),
-    json: () => Promise.resolve(data),
-    text: () => Promise.resolve(JSON.stringify(data)),
-  } as Response)
+  globalThis.fetch = vi.fn().mockImplementation((_url: string, init?: RequestInit) => {
+    const method = init?.method ?? 'GET'
+    if (method === 'DELETE') {
+      return Promise.resolve({
+        ok: true,
+        status: 200,
+        headers: new Headers({ 'content-type': 'application/json' }),
+        json: () => Promise.resolve(data),
+        text: () => Promise.resolve(JSON.stringify(data)),
+      } as Response)
+    }
+    return Promise.resolve({
+      ok: true,
+      status: 200,
+      headers: new Headers({ 'content-type': 'application/json' }),
+      json: () => Promise.resolve(data),
+      text: () => Promise.resolve(JSON.stringify(data)),
+    } as Response)
+  })
 }
 
 describe('RepoList', () => {
@@ -158,7 +170,7 @@ describe('RepoList', () => {
   it('highlights the selected repository', async () => {
     await renderRepoList({ selectedGuid: 'g2' })
 
-    const selected = screen.getByText('beta-XY-project').closest('button')
+    const selected = screen.getByText('beta-XY-project').closest('[role="button"]')
     expect(selected).toHaveClass('border-accent/40')
   })
 
@@ -223,5 +235,59 @@ describe('RepoList', () => {
     )
 
     expect(await screen.findByText('No repositories indexed yet.')).toBeInTheDocument()
+  })
+
+  describe('delete repository', () => {
+    it('opens confirmation dialog when delete button is clicked', async () => {
+      const user = userEvent.setup()
+      await renderRepoList()
+
+      await user.click(screen.getByLabelText('Delete repository alpha-repo'))
+      expect(screen.getByRole('alertdialog')).toBeInTheDocument()
+      expect(screen.getByText('Delete repository')).toBeInTheDocument()
+      expect(screen.getByText(/Are you sure you want to delete/)).toBeInTheDocument()
+    })
+
+    it('closes dialog when cancel is clicked', async () => {
+      const user = userEvent.setup()
+      await renderRepoList()
+
+      await user.click(screen.getByLabelText('Delete repository alpha-repo'))
+      expect(screen.getByRole('alertdialog')).toBeInTheDocument()
+
+      await user.click(screen.getByText('Cancel'))
+      expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument()
+    })
+
+    it('removes repository from list after successful deletion', async () => {
+      const user = userEvent.setup()
+      const onDelete = vi.fn()
+      render(
+        <AuthProvider>
+          <RepoList onSelect={vi.fn()} onDelete={onDelete} />
+        </AuthProvider>
+      )
+      await screen.findByText('alpha-repo')
+
+      mockFetchResponse({ message: 'Deleted', repo_guid: 'g1' })
+      await user.click(screen.getByLabelText('Delete repository alpha-repo'))
+      await user.click(screen.getByText('Delete'))
+
+      await waitFor(() => expect(screen.queryByText('alpha-repo')).not.toBeInTheDocument())
+      expect(screen.getByText('beta-XY-project')).toBeInTheDocument()
+      expect(onDelete).toHaveBeenCalledWith(mockRepos[0])
+    })
+
+    it('displays error when deletion fails', async () => {
+      const user = userEvent.setup()
+      await renderRepoList()
+
+      globalThis.fetch = vi.fn().mockRejectedValue(new Error('Network error'))
+
+      await user.click(screen.getByLabelText('Delete repository alpha-repo'))
+      await user.click(screen.getByText('Delete'))
+
+      expect(await screen.findByText('Network error')).toBeInTheDocument()
+    })
   })
 })

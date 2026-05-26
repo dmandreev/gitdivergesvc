@@ -47,6 +47,11 @@ function Main() {
                 refreshSignal={refreshKey}
                 onSelect={setSelectedRepo}
                 selectedGuid={selectedRepo?.guid}
+                onDelete={(repo) => {
+                  if (selectedRepo?.guid === repo.guid) {
+                    setSelectedRepo(null)
+                  }
+                }}
               />
             </aside>
 

@@ -3,6 +3,7 @@ import {
   listRepos,
   cloneRepo,
   fetchRepo,
+  deleteRepo,
   testToken,
   health,
   repoDivergence,
@@ -61,7 +62,7 @@ export type {
   BatchRepoRequest,
 }
 
-export { listRepos, cloneRepo, fetchRepo, testToken, health, repoDivergence, listBranches, getDivergenceCommits, batchDivergence }
+export { listRepos, cloneRepo, fetchRepo, deleteRepo, testToken, health, repoDivergence, listBranches, getDivergenceCommits, batchDivergence }
 
 export type ProgressEventPayload =
   | { event: 'start'; total?: number; message: string }

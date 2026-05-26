@@ -1,21 +1,25 @@
 import { useEffect, useRef, useState, useMemo, useCallback } from 'react'
-import { GitFork, RefreshCw, ChevronRight, HardDrive, Search, X } from 'lucide-react'
+import { GitFork, RefreshCw, ChevronRight, HardDrive, Search, X, Trash2, AlertTriangle } from 'lucide-react'
 import { useVirtualizer } from '@tanstack/react-virtual'
-import { listRepos, type RepoIndexEntry } from '../api/client'
+import { listRepos, deleteRepo, type RepoIndexEntry } from '../api/client'
 import { useAuth } from '../auth/AuthProvider'
 
 interface RepoListProps {
   onSelect: (repo: RepoIndexEntry) => void
   selectedGuid?: string
   refreshSignal?: number
+  onDelete?: (repo: RepoIndexEntry) => void
 }
 
-export function RepoList({ onSelect, selectedGuid, refreshSignal }: RepoListProps) {
+export function RepoList({ onSelect, selectedGuid, refreshSignal, onDelete }: RepoListProps) {
   const { getAccessToken } = useAuth()
   const [repos, setRepos] = useState<RepoIndexEntry[]>([])
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [filter, setFilter] = useState('')
+  const [confirmRepo, setConfirmRepo] = useState<RepoIndexEntry | null>(null)
+  const [deleting, setDeleting] = useState(false)
+  const [deleteError, setDeleteError] = useState<string | null>(null)
   const requestIdRef = useRef(0)
 
   const load = useCallback(async () => {
@@ -74,6 +78,38 @@ export function RepoList({ onSelect, selectedGuid, refreshSignal }: RepoListProp
   })
 
   const virtualItems = virtualizer.getVirtualItems()
+
+  const handleDeleteClick = useCallback((e: React.MouseEvent, repo: RepoIndexEntry) => {
+    e.stopPropagation()
+    setConfirmRepo(repo)
+    setDeleteError(null)
+  }, [])
+
+  const handleConfirmDelete = useCallback(async () => {
+    if (!confirmRepo) return
+    setDeleting(true)
+    setDeleteError(null)
+    try {
+      const token = getAccessToken()
+      const { error: apiError } = await deleteRepo({
+        path: { repo_guid: confirmRepo.guid },
+        auth: token ?? undefined,
+      })
+      if (apiError) throw apiError
+      setRepos((prev) => prev.filter((r) => r.guid !== confirmRepo.guid))
+      onDelete?.(confirmRepo)
+      setConfirmRepo(null)
+    } catch (e) {
+      setDeleteError(e instanceof Error ? e.message : 'Failed to delete repository')
+    } finally {
+      setDeleting(false)
+    }
+  }, [confirmRepo, getAccessToken, onDelete])
+
+  const handleCancelDelete = useCallback(() => {
+    setConfirmRepo(null)
+    setDeleteError(null)
+  }, [])
 
   return (
     <div className="space-y-3">
@@ -151,10 +187,18 @@ export function RepoList({ onSelect, selectedGuid, refreshSignal }: RepoListProp
               const repo = filteredRepos[virtualItem.index]
               const isActive = repo.guid === selectedGuid
               return (
-                <button
+                <div
                   key={repo.guid}
+                  role="button"
+                  tabIndex={0}
                   onClick={() => onSelect(repo)}
-                  className={`w-full text-left px-3 py-2.5 rounded-lg border transition-all duration-200 group
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' || e.key === ' ') {
+                      e.preventDefault()
+                      onSelect(repo)
+                    }
+                  }}
+                  className={`w-full text-left px-3 py-2.5 rounded-lg border transition-all duration-200 group cursor-pointer
                     ${
                       isActive
                         ? 'bg-surface-2 border-accent/40 shadow-lg shadow-accent-glow/20'
@@ -187,15 +231,82 @@ export function RepoList({ onSelect, selectedGuid, refreshSignal }: RepoListProp
                         <p className="text-[11px] text-text-dim truncate">{repo.url}</p>
                       </div>
                     </div>
-                    <ChevronRight
-                      className={`w-4 h-4 shrink-0 transition-colors ${
-                        isActive ? 'text-accent-light' : 'text-text-dim'
-                      }`}
-                    />
+                    <div className="flex items-center gap-1 shrink-0">
+                      <button
+                        onClick={(e) => handleDeleteClick(e, repo)}
+                        className="p-1.5 rounded-md text-text-dim hover:text-red hover:bg-red/10 transition-colors opacity-0 group-hover:opacity-100 focus:opacity-100"
+                        aria-label={`Delete repository ${repo.name}`}
+                        title="Delete repository"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </button>
+                      <ChevronRight
+                        className={`w-4 h-4 shrink-0 transition-colors ${
+                          isActive ? 'text-accent-light' : 'text-text-dim'
+                        }`}
+                      />
+                    </div>
                   </div>
-                </button>
+                </div>
               )
             })}
+          </div>
+        </div>
+      )}
+
+      {/* Delete confirmation modal */}
+      {confirmRepo && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm"
+          onClick={handleCancelDelete}
+          role="presentation"
+        >
+          <div
+            className="w-full max-w-sm mx-4 p-5 rounded-xl bg-surface-1 border border-surface-3 shadow-2xl space-y-4"
+            onClick={(e) => e.stopPropagation()}
+            role="alertdialog"
+            aria-modal="true"
+            aria-labelledby="delete-repo-title"
+            aria-describedby="delete-repo-desc"
+          >
+            <div className="flex items-start gap-3">
+              <div className="w-9 h-9 rounded-lg bg-red/10 flex items-center justify-center shrink-0">
+                <AlertTriangle className="w-5 h-5 text-red" />
+              </div>
+              <div className="space-y-1">
+                <h3 id="delete-repo-title" className="text-sm font-semibold text-text-main">
+                  Delete repository
+                </h3>
+                <p id="delete-repo-desc" className="text-xs text-text-muted leading-relaxed">
+                  Are you sure you want to delete <strong className="text-text-main">{confirmRepo.name}</strong>?
+                  This will remove the local clone and index entry. This action cannot be undone.
+                </p>
+              </div>
+            </div>
+
+            {deleteError && (
+              <div className="px-3 py-2 rounded-lg bg-red/10 border border-red/20 text-xs text-red">
+                {deleteError}
+              </div>
+            )}
+
+            <div className="flex items-center justify-end gap-2">
+              <button
+                onClick={handleCancelDelete}
+                disabled={deleting}
+                className="px-3 py-1.5 rounded-md text-xs font-medium text-text-main bg-surface-2 hover:bg-surface-3 transition-colors disabled:opacity-50"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleConfirmDelete}
+                disabled={deleting}
+                className="px-3 py-1.5 rounded-md text-xs font-medium text-white bg-red hover:bg-red/90 transition-colors disabled:opacity-50 flex items-center gap-1.5"
+              >
+                {deleting && <RefreshCw className="w-3 h-3 animate-spin" />}
+                Delete
+              </button>
+            </div>
           </div>
         </div>
       )}

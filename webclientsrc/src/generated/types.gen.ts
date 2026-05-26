@@ -280,6 +280,27 @@ export type Commit = {
 };
 
 /**
+ * Response for deleting a repository.
+ *
+ * Confirms that the repository entry has been removed from the index and
+ * (if present) its local clone directory deleted.
+ */
+export type DeleteRepoResponse = {
+    /**
+     * Human-readable message describing the result.
+     */
+    message: string;
+    /**
+     * The GUID of the deleted repository.
+     */
+    repo_guid: string;
+    /**
+     * Status of the deletion operation.
+     */
+    status: string;
+};
+
+/**
  * Query parameters for branch-divergence analysis of a single repository.
  *
  * The endpoint validates the requested branches against local remote-tracking
@@ -626,6 +647,44 @@ export type CloneRepoResponses = {
 };
 
 export type CloneRepoResponse = CloneRepoResponses[keyof CloneRepoResponses];
+
+export type DeleteRepoData = {
+    body?: never;
+    path: {
+        /**
+         * Repository GUID
+         */
+        repo_guid: string;
+    };
+    query?: never;
+    url: '/api/v1/repos/{repo_guid}';
+};
+
+export type DeleteRepoErrors = {
+    /**
+     * Repository not found or invalid
+     */
+    400: ApiError;
+    /**
+     * Unauthorized
+     */
+    401: ApiError;
+    /**
+     * Failed to remove repository files or update index
+     */
+    500: ApiError;
+};
+
+export type DeleteRepoError = DeleteRepoErrors[keyof DeleteRepoErrors];
+
+export type DeleteRepoResponses = {
+    /**
+     * Repository deleted successfully
+     */
+    200: DeleteRepoResponse;
+};
+
+export type DeleteRepoResponse2 = DeleteRepoResponses[keyof DeleteRepoResponses];
 
 export type ListBranchesData = {
     body?: never;

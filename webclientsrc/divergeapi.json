@@ -142,6 +142,74 @@
         ]
       }
     },
+    "/api/v1/repos/{repo_guid}": {
+      "delete": {
+        "tags": [
+          "crate"
+        ],
+        "summary": "Delete a repository from the local index and remove its on-disk clone.",
+        "description": "Looks up the repository by `repo_guid`, acquires the per-repo lock to\nprevent races with concurrent fetch or divergence operations, removes the\nlocal clone directory (if it exists), drops the entry from the index, and\ninvalidates any cached divergence data for the repository.",
+        "operationId": "delete_repo",
+        "parameters": [
+          {
+            "name": "repo_guid",
+            "in": "path",
+            "description": "Repository GUID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Repository deleted successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeleteRepoResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Repository not found or invalid",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Failed to remove repository files or update index",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ]
+      }
+    },
     "/api/v1/repos/{repo_guid}/branches": {
       "get": {
         "tags": [
@@ -827,6 +895,29 @@
             "type": "string",
             "format": "date-time",
             "description": "Commit timestamp in UTC."
+          }
+        }
+      },
+      "DeleteRepoResponse": {
+        "type": "object",
+        "description": "Response for deleting a repository.\n\nConfirms that the repository entry has been removed from the index and\n(if present) its local clone directory deleted.",
+        "required": [
+          "repo_guid",
+          "status",
+          "message"
+        ],
+        "properties": {
+          "message": {
+            "type": "string",
+            "description": "Human-readable message describing the result."
+          },
+          "repo_guid": {
+            "type": "string",
+            "description": "The GUID of the deleted repository."
+          },
+          "status": {
+            "type": "string",
+            "description": "Status of the deletion operation."
           }
         }
       },

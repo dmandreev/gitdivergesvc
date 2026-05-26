@@ -2,7 +2,7 @@
 
 import type { Client, Options as Options2, TDataShape } from './client';
 import { client } from './client.gen';
-import type { BatchDivergenceData, BatchDivergenceErrors, BatchDivergenceResponse, BatchDivergenceResponses, CloneRepoData, CloneRepoErrors, CloneRepoResponse, CloneRepoResponses, FetchRepoData, FetchRepoErrors, FetchRepoResponse, FetchRepoResponses, GetDivergenceCommitsData, GetDivergenceCommitsErrors, GetDivergenceCommitsResponses, HealthData, HealthResponses, ListBranchesData, ListBranchesErrors, ListBranchesResponses, ListReposData, ListReposErrors, ListReposResponses, RepoDivergenceData, RepoDivergenceErrors, RepoDivergenceResponse, RepoDivergenceResponses, TestTokenData, TestTokenErrors, TestTokenResponses } from './types.gen';
+import type { BatchDivergenceData, BatchDivergenceErrors, BatchDivergenceResponse, BatchDivergenceResponses, CloneRepoData, CloneRepoErrors, CloneRepoResponse, CloneRepoResponses, DeleteRepoData, DeleteRepoErrors, DeleteRepoResponses, FetchRepoData, FetchRepoErrors, FetchRepoResponse, FetchRepoResponses, GetDivergenceCommitsData, GetDivergenceCommitsErrors, GetDivergenceCommitsResponses, HealthData, HealthResponses, ListBranchesData, ListBranchesErrors, ListBranchesResponses, ListReposData, ListReposErrors, ListReposResponses, RepoDivergenceData, RepoDivergenceErrors, RepoDivergenceResponse, RepoDivergenceResponses, TestTokenData, TestTokenErrors, TestTokenResponses } from './types.gen';
 
 export type Options<TData extends TDataShape = TDataShape, ThrowOnError extends boolean = boolean, TResponse = unknown> = Options2<TData, ThrowOnError, TResponse> & {
     /**
@@ -72,6 +72,20 @@ export const cloneRepo = <ThrowOnError extends boolean = false>(options: Options
         'Content-Type': 'application/json',
         ...options.headers
     }
+});
+
+/**
+ * Delete a repository from the local index and remove its on-disk clone.
+ *
+ * Looks up the repository by `repo_guid`, acquires the per-repo lock to
+ * prevent races with concurrent fetch or divergence operations, removes the
+ * local clone directory (if it exists), drops the entry from the index, and
+ * invalidates any cached divergence data for the repository.
+ */
+export const deleteRepo = <ThrowOnError extends boolean = false>(options: Options<DeleteRepoData, ThrowOnError>) => (options.client ?? client).delete<DeleteRepoResponses, DeleteRepoErrors, ThrowOnError>({
+    security: [{ scheme: 'bearer', type: 'http' }],
+    url: '/api/v1/repos/{repo_guid}',
+    ...options
 });
 
 /**
