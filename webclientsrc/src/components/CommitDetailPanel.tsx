@@ -19,6 +19,7 @@ interface CommitDetailPanelProps {
   targetBranch: string
   branches: string[]
   totalCommits: number
+  accessToken?: string | null
 }
 
 function formatCommitDate(iso: string): string {
@@ -56,6 +57,7 @@ export function CommitDetailPanel({
   targetBranch,
   branches,
   totalCommits,
+  accessToken,
 }: CommitDetailPanelProps) {
   const [commits, setCommits] = useState<Commit[]>([])
   const [page, setPage] = useState(0)
@@ -143,6 +145,7 @@ export function CommitDetailPanel({
             page: pageNum,
             page_size: PAGE_SIZE,
           },
+          ...(accessToken ? { auth: accessToken } : {}),
         })
 
         const data = response.data

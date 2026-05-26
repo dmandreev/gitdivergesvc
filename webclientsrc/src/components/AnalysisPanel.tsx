@@ -225,6 +225,7 @@ export function AnalysisPanel({ repo }: AnalysisPanelProps) {
             .map((bs: BranchStatus) => bs.branch) ?? []
         }
         totalCommits={selectedCell?.commitCount ?? 0}
+        accessToken={token}
       />
     </div>
   )

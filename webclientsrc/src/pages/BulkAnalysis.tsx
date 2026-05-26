@@ -378,6 +378,7 @@ export function BulkAnalysis() {
         targetBranch={selectedCell?.targetBranch ?? ''}
         branches={selectedCell?.branches ?? []}
         totalCommits={selectedCell?.commitCount ?? 0}
+        accessToken={token}
       />
 
       <footer className="border-t border-surface-3 mt-auto">

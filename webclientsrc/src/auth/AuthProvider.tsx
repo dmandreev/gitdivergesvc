@@ -67,7 +67,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     if (userManager) await userManager.signinRedirect()
   }, [])
   const signoutRedirect = useCallback(async () => {
-    if (userManager) await userManager.signoutRedirect()
+    if (!userManager) return
+    // Clear local session first so the UI updates immediately
+    await userManager.removeUser()
+    // Build a short logout URL (no id_token_hint) to avoid 414
+    const url = new URL(`${CONFIG.OIDC_AUTHORITY}/protocol/openid-connect/logout`)
+    url.searchParams.set('client_id', CONFIG.OIDC_CLIENT_ID)
+    url.searchParams.set('post_logout_redirect_uri', window.location.origin)
+    window.location.href = url.toString()
   }, [])
   const getAccessToken = useCallback(() => user?.access_token ?? null, [user])
 
