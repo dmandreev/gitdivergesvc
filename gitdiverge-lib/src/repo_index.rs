@@ -146,7 +146,9 @@ impl RepoIndex {
     /// given GUID was found. The index is **not** automatically persisted;
     /// callers must call [`save`](Self::save) afterwards.
     pub fn remove_by_guid(&mut self, guid: &str) -> Option<RepoEntry> {
-        let key = self.entries.iter()
+        let key = self
+            .entries
+            .iter()
             .find(|(_, e)| e.guid == guid)
             .map(|(k, _)| k.clone())?;
         self.entries.remove(&key)

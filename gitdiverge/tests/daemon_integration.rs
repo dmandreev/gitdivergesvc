@@ -227,7 +227,11 @@ async fn delete_repo_removes_repo_from_disk_and_index() {
 
     let repo_path = clone_dir.join("abc123").join("repo");
     let status = std::process::Command::new("git")
-        .args(["clone", remote.to_str().unwrap(), repo_path.to_str().unwrap()])
+        .args([
+            "clone",
+            remote.to_str().unwrap(),
+            repo_path.to_str().unwrap(),
+        ])
         .status()
         .unwrap();
     assert!(status.success());
