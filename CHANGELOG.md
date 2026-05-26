@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-05-26
+
+### Added
+
+- **Repository deletion**:
+  - `DELETE /api/v1/repos/{repo_guid}` endpoint to remove a repository from the local index and delete its on-disk clone. Includes per-repo locking, divergence-cache invalidation, and OpenAPI documentation.
+  - Web-client UI (`RepoList`) for deleting repositories with loading states and updated auto-generated API client.
+- **Bulk-operation animations** in the web client — `BulkProgressPanel` now shows animated spinner rings and a pulsing glow on the active pipeline phase for smoother visual feedback during batch operations.
+
+### Fixed
+
+- **Authentication / logout** — OIDC sign-out now clears the local session first and redirects to a short logout URL without `id_token_hint`, avoiding `414 URI Too Long` errors from Keycloak.
+- **Commit details** — `CommitDetailPanel` now correctly passes the access token when fetching paged commits, ensuring authenticated requests succeed.
+- **README** — removed broken badge images.
+
 ## [0.1.0] - 2026-05-25
 
 ### Added
@@ -59,5 +74,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Multi-stage `Dockerfile` building the web client, running Rust tests, and producing an optimised binary (`profile = extreme`).
   - Embedded static assets via `include_dir` when `webclientsrc/dist` is present at compile time.
 
-[Unreleased]: https://github.com/dmandreev/gitdivergesvc/compare/v0.1.0...HEAD
-[0.1.0-alpha]: https://github.com/dmandreev/gitdivergesvc/releases/tag/v0.1.0
+[Unreleased]: https://github.com/dmandreev/gitdivergesvc/compare/v0.1.1...HEAD
+[0.1.1]: https://github.com/dmandreev/gitdivergesvc/releases/tag/v0.1.1
+[0.1.0]: https://github.com/dmandreev/gitdivergesvc/releases/tag/v0.1.0
