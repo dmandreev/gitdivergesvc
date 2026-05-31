@@ -12,6 +12,8 @@ jobs:
   build:
     name: Build ${{ matrix.suffix }}
     runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
     strategy:
       fail-fast: false
       matrix:
@@ -85,6 +87,8 @@ jobs:
     name: Generate checksums
     needs: build
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
       - name: Download all artifacts
         uses: actions/download-artifact@v7
